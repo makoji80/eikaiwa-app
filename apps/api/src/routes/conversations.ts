@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import type { PrismaClient } from '@prisma/client';
 import {
   CreateConversationInputSchema,
@@ -55,7 +55,7 @@ function toMessageDto(row: {
 
 export function conversationsRouter(prisma: PrismaClient, env: Pick<Env, 'JWT_SECRET'>): Router {
   const router = Router();
-  router.use(requireAuth(env.JWT_SECRET));
+  router.use(express.json({ limit: '10kb' }), requireAuth(env.JWT_SECRET));
 
   router.post(
     '/',

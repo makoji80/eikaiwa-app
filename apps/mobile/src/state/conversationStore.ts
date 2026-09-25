@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Message, MomentCandidate, LevelSetting, CoachingStyle } from '@eikaiwa/contracts';
+import type { Message, MomentCandidate, LevelSetting, CoachingStyle, TranscribeLocale } from '@eikaiwa/contracts';
 import * as api from '../lib/apiClient';
 import { ApiError } from '../lib/apiClient';
 import { generateRequestId } from '../lib/requestId';
@@ -15,6 +15,15 @@ interface PendingSuggestion {
   sourceMessageId: string;
 }
 
+export type RecordingTarget = 'jp_intent' | 'spoken_en';
+
+interface TranscribeRecordingParams {
+  audioBase64: string;
+  mimeType: string;
+  locale: TranscribeLocale;
+  target: RecordingTarget;
+}
+
 interface ConversationState {
   conversationId: string | null;
   topic: string | null;
@@ -23,13 +32,19 @@ interface ConversationState {
   pendingSuggestion: PendingSuggestion | null;
   momentCandidates: MomentCandidate[];
   draftText: string;
+  jpIntentDraft: string;
 
   setDraftText: (text: string) => void;
+  setJpIntentDraft: (text: string) => void;
   startConversation: (token: string, topic?: string) => Promise<string>;
   loadConversation: (token: string, conversationId: string) => Promise<void>;
   requestCompose: (token: string, jpIntent: string) => Promise<void>;
   cancelCompose: () => void;
   sendReply: (token: string) => Promise<void>;
+  beginListening: () => void;
+  recordingFailed: (message: string) => void;
+  transcribeRecording: (token: string, params: TranscribeRecordingParams) => Promise<void>;
+  markSpeechDone: () => void;
   reset: () => void;
 }
 
@@ -46,8 +61,10 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   pendingSuggestion: null,
   momentCandidates: [],
   draftText: '',
+  jpIntentDraft: '',
 
   setDraftText: (text) => set({ draftText: text }),
+  setJpIntentDraft: (text) => set({ jpIntentDraft: text }),
 
   startConversation: async (token, topic) => {
     const { conversation } = await api.createConversation(token, { topic });
@@ -59,6 +76,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       pendingSuggestion: null,
       momentCandidates: [],
       draftText: '',
+      jpIntentDraft: '',
     });
     return conversation.id;
   },
@@ -91,6 +109,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
           englishText: result.english,
           sourceMessageId: result.source_message_id,
         },
+        jpIntentDraft: '',
         messages: [
           ...s.messages,
           {
@@ -169,6 +188,41 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     }
   },
 
+  beginListening: () => set((s) => ({ phase: conversationReducer(s.phase, { type: 'START_RECORDING' }) })),
+
+  recordingFailed: (message) =>
+    set((s) => ({ phase: conversationReducer(s.phase, { type: 'RECORDING_FAILED', message, retryable: true }) })),
+
+  transcribeRecording: async (token, params) => {
+    set((s) => ({ phase: conversationReducer(s.phase, { type: 'STOP_RECORDING' }) }));
+    try {
+      const result = await api.transcribe(token, {
+        request_id: generateRequestId('transcribe'),
+        locale: params.locale,
+        audio_base64: params.audioBase64,
+        mime_type: params.mimeType,
+      });
+      // 転記結果は本人の確認・編集を経てから初めてcompose/replyに渡る
+      // （ここではまだ「本人が発話した」記録にはしない）。
+      if (params.target === 'jp_intent') {
+        set((s) => ({
+          phase: conversationReducer(s.phase, { type: 'TRANSCRIBE_SUCCEEDED' }),
+          jpIntentDraft: result.transcript,
+        }));
+      } else {
+        set((s) => ({
+          phase: conversationReducer(s.phase, { type: 'TRANSCRIBE_SUCCEEDED' }),
+          draftText: result.transcript,
+        }));
+      }
+    } catch (err) {
+      const { message, retryable } = errorMessage(err);
+      set((s) => ({ phase: conversationReducer(s.phase, { type: 'TRANSCRIBE_FAILED', message, retryable }) }));
+    }
+  },
+
+  markSpeechDone: () => set((s) => ({ phase: conversationReducer(s.phase, { type: 'SPEECH_DONE' }) })),
+
   reset: () =>
     set({
       conversationId: null,
@@ -178,5 +232,6 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       pendingSuggestion: null,
       momentCandidates: [],
       draftText: '',
+      jpIntentDraft: '',
     }),
 }));

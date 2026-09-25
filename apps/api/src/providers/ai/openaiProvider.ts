@@ -1,4 +1,4 @@
-import type { AiProvider, ComposeParams, ReplyParams } from './types';
+import type { AiProvider, ComposeParams, ReplyParams, TranscribeParams } from './types';
 
 /**
  * OpenAI Chat Completions を使う実装。
@@ -65,6 +65,41 @@ async function callChatCompletion(params: {
   };
 }
 
+async function callTranscription(params: {
+  apiKey: string;
+  audioBuffer: Buffer;
+  mimeType: string;
+  locale: string;
+}): Promise<{ parsed: unknown; usage: { units: number; estimatedCost: number } }> {
+  const languageHint = params.locale.split('-')[0] ?? 'ja';
+  const formData = new FormData();
+  formData.append('file', new Blob([params.audioBuffer], { type: params.mimeType }), 'audio.m4a');
+  formData.append('model', 'whisper-1');
+  formData.append('language', languageHint);
+
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${params.apiKey}` },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`OpenAI transcription API error: ${response.status} ${body}`);
+  }
+
+  const data = (await response.json()) as { text: string };
+  return {
+    parsed: {
+      transcript: data.text,
+      language: languageHint === 'ja' ? 'ja' : 'en',
+      confidence: null,
+    },
+    // Whisperは音声の長さに応じた課金。正確な見積りは未実装（導入時に要確認）。
+    usage: { units: 1, estimatedCost: 0 },
+  };
+}
+
 export class OpenAiProvider implements AiProvider {
   constructor(
     private readonly apiKey: string,
@@ -95,6 +130,16 @@ ${history}
 以下のJSON形式のみで出力してください:
 {"reply_text": "...", "follow_up": null, "correction": null, "moment_candidates": []}`;
     const { parsed, usage } = await callChatCompletion({ apiKey: this.apiKey, model: this.model, userPrompt });
+    return { output: parsed, usage };
+  }
+
+  async transcribe(params: TranscribeParams) {
+    const { parsed, usage } = await callTranscription({
+      apiKey: this.apiKey,
+      audioBuffer: params.audioBuffer,
+      mimeType: params.mimeType,
+      locale: params.locale,
+    });
     return { output: parsed, usage };
   }
 }

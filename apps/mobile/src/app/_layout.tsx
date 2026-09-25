@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { setAudioModeAsync } from 'expo-audio';
 import { useAuthStore } from '../state/authStore';
 
 export default function RootLayout() {
@@ -9,6 +10,9 @@ export default function RootLayout() {
 
   useEffect(() => {
     hydrate();
+    // マナーモード/サイレントモードでも録音・読み上げ両方が動くようにする。
+    // シミュレータ等オーディオ非対応環境でも起動が落ちないようtry/catchで包む。
+    setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
   }, [hydrate]);
 
   return (

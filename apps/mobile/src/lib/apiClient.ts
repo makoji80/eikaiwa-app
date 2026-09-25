@@ -7,6 +7,8 @@ import type {
   CreateConversationInput,
   CreateConversationOutput,
   ConversationDetailOutput,
+  TranscribeInput,
+  TranscribeOutput,
 } from '@eikaiwa/contracts';
 
 /**
@@ -90,4 +92,8 @@ export function compose(token: string, input: ComposeInput): Promise<ComposeOutp
 
 export function reply(token: string, input: ReplyInput): Promise<ReplyOutput> {
   return request('/api/reply', { method: 'POST', token, body: input });
+}
+
+export function transcribe(token: string, input: TranscribeInput): Promise<TranscribeOutput> {
+  return request('/api/transcribe', { method: 'POST', token, body: input });
 }

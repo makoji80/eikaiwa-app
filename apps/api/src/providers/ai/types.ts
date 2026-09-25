@@ -16,6 +16,13 @@ export interface ReplyParams {
   style: string;
 }
 
+export interface TranscribeParams {
+  /** デコード済み音声バイナリ。呼び出し側・実装側ともにディスク/DBへ書き込まない。 */
+  audioBuffer: Buffer;
+  mimeType: string;
+  locale: string;
+}
+
 /** ComposeOutputSchema / ReplyOutputSchema と同じ形になるはずの生出力（呼び出し側でZod検証する）。 */
 export interface AiResult<TOutput> {
   output: TOutput;
@@ -25,4 +32,5 @@ export interface AiResult<TOutput> {
 export interface AiProvider {
   compose(params: ComposeParams): Promise<AiResult<unknown>>;
   reply(params: ReplyParams): Promise<AiResult<unknown>>;
+  transcribe(params: TranscribeParams): Promise<AiResult<unknown>>;
 }

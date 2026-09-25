@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -13,11 +13,14 @@ import {
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import type { Message } from '@eikaiwa/contracts';
 import { useAuthStore } from '../../state/authStore';
-import { useConversationStore } from '../../state/conversationStore';
+import { useConversationStore, type RecordingTarget } from '../../state/conversationStore';
+import { usePushToTalk } from '../../hooks/usePushToTalk';
+import { speakEnglish, stopSpeaking } from '../../lib/tts';
 
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user';
   const isJapaneseIntent = message.role === 'user' && message.language === 'ja';
+  const isAssistant = message.role === 'assistant';
   return (
     <View
       style={[
@@ -27,30 +30,77 @@ function MessageBubble({ message }: { message: Message }) {
       ]}
     >
       {isJapaneseIntent ? <Text style={styles.jpIntentLabel}>言いたいこと（日本語）</Text> : null}
-      <Text style={isUser ? styles.userText : styles.assistantText}>{message.text}</Text>
+      <View style={styles.bubbleContentRow}>
+        <Text style={[isUser ? styles.userText : styles.assistantText, styles.bubbleTextFlex]}>{message.text}</Text>
+        {isAssistant ? (
+          <TouchableOpacity
+            onPress={() => speakEnglish(message.text)}
+            accessibilityRole="button"
+            accessibilityLabel="読み上げる"
+            hitSlop={8}
+          >
+            <Text style={styles.replayIcon}>🔊</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
     </View>
+  );
+}
+
+function MicButton({
+  disabled,
+  active,
+  onPressIn,
+  onPressOut,
+  label,
+}: {
+  disabled: boolean;
+  active: boolean;
+  onPressIn: () => void;
+  onPressOut: () => void;
+  label: string;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.micButton, active && styles.micButtonActive, disabled && styles.buttonDisabled]}
+      onPressIn={disabled ? undefined : onPressIn}
+      onPressOut={disabled ? undefined : onPressOut}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
+      <Text style={styles.micButtonText}>{active ? '●' : '🎙'}</Text>
+    </TouchableOpacity>
   );
 }
 
 export default function ConversationScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const token = useAuthStore((s) => s.token);
+  const pushToTalk = usePushToTalk();
 
   const conversationId = useConversationStore((s) => s.conversationId);
   const messages = useConversationStore((s) => s.messages);
   const phase = useConversationStore((s) => s.phase);
   const pendingSuggestion = useConversationStore((s) => s.pendingSuggestion);
   const draftText = useConversationStore((s) => s.draftText);
+  const jpIntentDraft = useConversationStore((s) => s.jpIntentDraft);
   const momentCandidates = useConversationStore((s) => s.momentCandidates);
   const setDraftText = useConversationStore((s) => s.setDraftText);
+  const setJpIntentDraft = useConversationStore((s) => s.setJpIntentDraft);
   const loadConversation = useConversationStore((s) => s.loadConversation);
   const requestCompose = useConversationStore((s) => s.requestCompose);
   const cancelCompose = useConversationStore((s) => s.cancelCompose);
   const sendReply = useConversationStore((s) => s.sendReply);
+  const beginListening = useConversationStore((s) => s.beginListening);
+  const recordingFailed = useConversationStore((s) => s.recordingFailed);
+  const transcribeRecording = useConversationStore((s) => s.transcribeRecording);
+  const markSpeechDone = useConversationStore((s) => s.markSpeechDone);
 
   const [showComposePanel, setShowComposePanel] = useState(false);
-  const [jpIntentInput, setJpIntentInput] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [activeRecordingTarget, setActiveRecordingTarget] = useState<RecordingTarget | null>(null);
+  const lastSpokenIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!token || !id) return;
@@ -59,6 +109,24 @@ export default function ConversationScreen() {
       setLoadError(err instanceof Error ? err.message : '会話を読み込めませんでした');
     });
   }, [token, id, conversationId, loadConversation]);
+
+  useEffect(() => {
+    pushToTalk.checkPermission();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // AI応答が届いたら自動で読み上げる（本文中の🔊ボタンで再生し直しも可能）。
+  useEffect(() => {
+    if (phase.status !== 'speaking_reply') return;
+    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (!lastAssistant || lastSpokenIdRef.current === lastAssistant.id) {
+      markSpeechDone();
+      return;
+    }
+    lastSpokenIdRef.current = lastAssistant.id;
+    speakEnglish(lastAssistant.text, () => markSpeechDone());
+    return () => stopSpeaking();
+  }, [phase.status, messages, markSpeechDone]);
 
   if (!token) {
     return (
@@ -85,10 +153,13 @@ export default function ConversationScreen() {
   }
 
   const isBusy = phase.status === 'composing_en' || phase.status === 'generating_reply';
+  const isListening = phase.status === 'listening';
+  const isTranscribing = phase.status === 'transcribing';
+  const micUnavailable = pushToTalk.micPermission === 'denied';
 
   const handleCompose = async () => {
-    if (!jpIntentInput.trim()) return;
-    await requestCompose(token, jpIntentInput.trim());
+    if (!jpIntentDraft.trim()) return;
+    await requestCompose(token, jpIntentDraft.trim());
   };
 
   const handleUseSuggestion = () => {
@@ -100,6 +171,37 @@ export default function ConversationScreen() {
   const handleSend = async () => {
     await sendReply(token);
   };
+
+  const handleMicPressIn = async (target: RecordingTarget) => {
+    if (isBusy || isListening || isTranscribing || micUnavailable) return;
+    setActiveRecordingTarget(target);
+    beginListening();
+    const started = await pushToTalk.startRecording();
+    if (!started) {
+      setActiveRecordingTarget(null);
+      recordingFailed('マイクを使用できませんでした。テキストで入力してください。');
+    }
+  };
+
+  const handleMicPressOut = async (target: RecordingTarget) => {
+    if (activeRecordingTarget !== target) return;
+    setActiveRecordingTarget(null);
+    const audio = await pushToTalk.stopRecording();
+    if (!audio) {
+      recordingFailed('録音を取得できませんでした。もう一度お試しください。');
+      return;
+    }
+    await transcribeRecording(token, {
+      audioBase64: audio.audioBase64,
+      mimeType: audio.mimeType,
+      locale: target === 'jp_intent' ? 'ja-JP' : 'en-US',
+      target,
+    });
+  };
+
+  const jpMicDisabled = micUnavailable || isBusy || isTranscribing || (isListening && activeRecordingTarget !== 'jp_intent');
+  const enMicDisabled =
+    micUnavailable || isBusy || isTranscribing || (isListening && activeRecordingTarget !== 'spoken_en');
 
   return (
     <KeyboardAvoidingView
@@ -137,16 +239,38 @@ export default function ConversationScreen() {
         </View>
       ) : null}
 
+      {isTranscribing ? (
+        <View style={styles.statusBanner}>
+          <ActivityIndicator size="small" />
+          <Text style={styles.statusBannerText}>文字起こし中…</Text>
+        </View>
+      ) : null}
+
+      {micUnavailable ? (
+        <View style={styles.statusBanner}>
+          <Text style={styles.statusBannerText}>マイクが使用できません。文字で入力してください。</Text>
+        </View>
+      ) : null}
+
       {showComposePanel ? (
         <View style={styles.composePanel}>
           <Text style={styles.composeLabel}>言いたいことを日本語で</Text>
-          <TextInput
-            style={styles.composeInput}
-            placeholder="例: 来週の出張の予定を確認したい"
-            value={jpIntentInput}
-            onChangeText={setJpIntentInput}
-            multiline
-          />
+          <View style={styles.composeInputRow}>
+            <TextInput
+              style={[styles.composeInput, styles.inputFlex]}
+              placeholder="例: 来週の出張の予定を確認したい（🎙で録音も可）"
+              value={jpIntentDraft}
+              onChangeText={setJpIntentDraft}
+              multiline
+            />
+            <MicButton
+              disabled={jpMicDisabled}
+              active={isListening && activeRecordingTarget === 'jp_intent'}
+              onPressIn={() => handleMicPressIn('jp_intent')}
+              onPressOut={() => handleMicPressOut('jp_intent')}
+              label="日本語で録音する"
+            />
+          </View>
           <View style={styles.composeActions}>
             <TouchableOpacity
               style={[styles.smallButton, styles.smallButtonSecondary]}
@@ -158,7 +282,7 @@ export default function ConversationScreen() {
             <TouchableOpacity
               style={styles.smallButton}
               onPress={handleCompose}
-              disabled={phase.status === 'composing_en' || !jpIntentInput.trim()}
+              disabled={phase.status === 'composing_en' || !jpIntentDraft.trim()}
               accessibilityRole="button"
             >
               {phase.status === 'composing_en' ? (
@@ -200,10 +324,17 @@ export default function ConversationScreen() {
         </TouchableOpacity>
         <TextInput
           style={styles.textInput}
-          placeholder="英語で入力（文字で入力）"
+          placeholder="英語で入力（🎙で発話も可）"
           value={draftText}
           onChangeText={setDraftText}
           multiline
+        />
+        <MicButton
+          disabled={enMicDisabled}
+          active={isListening && activeRecordingTarget === 'spoken_en'}
+          onPressIn={() => handleMicPressIn('spoken_en')}
+          onPressOut={() => handleMicPressOut('spoken_en')}
+          label="英語で話す（押している間だけ録音）"
         />
         <TouchableOpacity
           style={[styles.sendButton, (!draftText.trim() || isBusy) && styles.buttonDisabled]}
@@ -235,13 +366,20 @@ const styles = StyleSheet.create({
   assistantBubble: { alignSelf: 'flex-start', backgroundColor: '#F0F0F0' },
   jpIntentBubble: { backgroundColor: '#FFF3D6' },
   jpIntentLabel: { fontSize: 10, color: '#8a6d1f', marginBottom: 2 },
+  bubbleContentRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  bubbleTextFlex: { flexShrink: 1 },
+  replayIcon: { fontSize: 16 },
   userText: { color: '#fff', fontSize: 15 },
   assistantText: { color: '#222', fontSize: 15 },
   errorBanner: { backgroundColor: '#FDECEA', padding: 10 },
   errorBannerText: { color: '#c0392b', fontSize: 13 },
   errorBannerHint: { color: '#c0392b', fontSize: 11, marginTop: 2 },
+  statusBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#EAF4FF', padding: 8 },
+  statusBannerText: { color: '#1a5c96', fontSize: 12 },
   composePanel: { borderTopWidth: 1, borderTopColor: '#eee', padding: 12, gap: 8, backgroundColor: '#FAFAFA' },
   composeLabel: { fontSize: 12, color: '#555', fontWeight: '600' },
+  composeInputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  inputFlex: { flex: 1 },
   composeInput: {
     borderWidth: 1,
     borderColor: '#ccc',
@@ -255,7 +393,15 @@ const styles = StyleSheet.create({
   smallButtonSecondary: { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#ccc' },
   smallButtonText: { color: '#fff', fontWeight: '600', fontSize: 13 },
   smallButtonSecondaryText: { color: '#555', fontWeight: '600', fontSize: 13 },
-  suggestionBox: { marginTop: 8, backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#ddd', padding: 10, gap: 8 },
+  suggestionBox: {
+    marginTop: 8,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    padding: 10,
+    gap: 8,
+  },
   suggestionText: { fontSize: 15, fontWeight: '600' },
   inputRow: {
     flexDirection: 'row',
@@ -274,6 +420,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   jpToggleButtonText: { fontSize: 12, fontWeight: '700', color: '#8a6d1f' },
+  micButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EAF4FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  micButtonActive: { backgroundColor: '#e74c3c' },
+  micButtonText: { fontSize: 16 },
   textInput: {
     flex: 1,
     borderWidth: 1,

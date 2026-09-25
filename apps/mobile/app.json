@@ -30,6 +30,12 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "録音した音声は文字起こしにのみ使用し、保存はしません。"
+        }
       ]
     ],
     "experiments": {

@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import type { PrismaClient } from '@prisma/client';
 import { SignupInputSchema, LoginInputSchema, type AuthTokenOutput } from '@eikaiwa/contracts';
 import { validateBody } from '../middleware/validate';
@@ -15,7 +15,7 @@ import type { Env } from '../env';
  */
 export function authRouter(prisma: PrismaClient, env: Pick<Env, 'JWT_SECRET' | 'JWT_EXPIRES_IN_SECONDS'>): Router {
   const router = Router();
-  router.use(authRateLimiter);
+  router.use(express.json({ limit: '10kb' }), authRateLimiter);
 
   router.post(
     '/signup',

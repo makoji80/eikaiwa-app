@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import type { PrismaClient } from '@prisma/client';
 import { ComposeInputSchema, ComposeAiOutputSchema, ComposeOutputSchema, type ComposeOutput } from '@eikaiwa/contracts';
 import { validateBody, assertValidResponse } from '../middleware/validate';
@@ -17,7 +17,7 @@ export function composeRouter(
   env: Pick<Env, 'JWT_SECRET' | 'IDEMPOTENCY_TTL_HOURS'>,
 ): Router {
   const router = Router();
-  router.use(requireAuth(env.JWT_SECRET), aiRateLimiter);
+  router.use(express.json({ limit: '20kb' }), requireAuth(env.JWT_SECRET), aiRateLimiter);
 
   router.post(
     '/',

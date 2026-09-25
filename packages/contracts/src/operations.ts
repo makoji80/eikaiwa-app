@@ -14,10 +14,19 @@ export const CoachingStyleSchema = z.enum(['conversation', 'coaching', 'intensiv
 export type CoachingStyle = z.infer<typeof CoachingStyleSchema>;
 
 // --- transcribe ---
+export const TranscribeLocaleSchema = z.enum(['ja-JP', 'en-US']);
+export type TranscribeLocale = z.infer<typeof TranscribeLocaleSchema>;
+
+/**
+ * 仕様書は入力を「audio または upload_ref」としているが、オブジェクトストレージが
+ * 未導入の現フェーズでは audio_base64 のみ実装する（upload_refを使う経路は将来追加）。
+ * 音声データはサーバーに保存しない — メモリ上でAIプロバイダに渡した後に破棄する。
+ */
 export const TranscribeInputSchema = z.object({
   request_id: z.string().min(1).max(200),
-  locale: z.string().default('ja-JP'),
-  upload_ref: z.string(),
+  locale: TranscribeLocaleSchema.default('ja-JP'),
+  audio_base64: z.string().min(1),
+  mime_type: z.string().default('audio/m4a'),
 });
 export type TranscribeInput = z.infer<typeof TranscribeInputSchema>;
 

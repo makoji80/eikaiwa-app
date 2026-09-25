@@ -8,19 +8,24 @@ import { authRouter } from './routes/auth';
 import { conversationsRouter } from './routes/conversations';
 import { composeRouter } from './routes/compose';
 import { replyRouter } from './routes/reply';
+import { transcribeRouter } from './routes/transcribe';
 import { errorHandler } from './middleware/errorHandler';
 
-/** テスト（supertest）と本番起動(index.ts)の両方から使う、依存を注入済みのExpressアプリを組み立てる。 */
+/**
+ * テスト（supertest）と本番起動(index.ts)の両方から使う、依存を注入済みのExpressアプリを組み立てる。
+ * express.json() はアプリ全体には掛けず、各ルーターが自分に必要な上限で個別に適用する
+ * （/api/transcribe は音声base64を運ぶため他ルートより大きい上限が必要なため）。
+ */
 export function createApp(prisma: PrismaClient, aiProvider: AiProvider, env: Env) {
   const app = express();
   app.use(cors({ origin: env.CORS_ORIGIN }));
-  app.use(express.json({ limit: '1mb' }));
 
   app.use(healthRouter());
   app.use('/api/auth', authRouter(prisma, env));
   app.use('/api/conversations', conversationsRouter(prisma, env));
   app.use('/api/compose', composeRouter(prisma, aiProvider, env));
   app.use('/api/reply', replyRouter(prisma, aiProvider, env));
+  app.use('/api/transcribe', transcribeRouter(prisma, aiProvider, env));
 
   app.use((_req, res) => {
     res.status(404).json({ error: { code: 'not_found', message: 'Not Found', retryable: false } });

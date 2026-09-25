@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import type { PrismaClient } from '@prisma/client';
 import { ReplyInputSchema, ReplyOutputSchema, type ReplyOutput } from '@eikaiwa/contracts';
 import { validateBody } from '../middleware/validate';
@@ -23,7 +23,7 @@ export function replyRouter(
   env: Pick<Env, 'JWT_SECRET' | 'IDEMPOTENCY_TTL_HOURS'>,
 ): Router {
   const router = Router();
-  router.use(requireAuth(env.JWT_SECRET), aiRateLimiter);
+  router.use(express.json({ limit: '20kb' }), requireAuth(env.JWT_SECRET), aiRateLimiter);
 
   router.post(
     '/',

@@ -1,4 +1,4 @@
-import type { AiProvider, ComposeParams, ReplyParams } from './types';
+import type { AiProvider, ComposeParams, ReplyParams, TranscribeParams } from './types';
 
 /**
  * ネットワーク呼び出しなしの決定論的モック。実鍵が無い環境でもcompose/replyの
@@ -33,6 +33,20 @@ export class MockAiProvider implements AiProvider {
               },
             ]
           : [],
+      },
+      usage: { units: 0, estimatedCost: 0 },
+    };
+  }
+
+  async transcribe(params: TranscribeParams) {
+    const isJapanese = params.locale.startsWith('ja');
+    return {
+      output: {
+        transcript: isJapanese
+          ? '（モック文字起こし）音声の内容は解析していません。'
+          : '(mock transcript) Audio content was not actually analyzed.',
+        language: isJapanese ? ('ja' as const) : ('en' as const),
+        confidence: null,
       },
       usage: { units: 0, estimatedCost: 0 },
     };

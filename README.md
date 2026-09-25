@@ -23,6 +23,7 @@ docs/            仕様書・決定記録・未決事項
 
 ```bash
 npm install
+# postinstallでpackages/contractsが自動ビルドされる（apps/api・apps/mobileはこれに依存する）
 
 # apps/api
 cp apps/api/.env.example apps/api/.env
@@ -33,6 +34,8 @@ cp apps/mobile/.env.example apps/mobile/.env
 ```
 
 秘密値（JWT_SECRET, OPENAI_API_KEY等）は `.env` にのみ置き、コミットしない。`.env.example` は変数名のみを示す。
+
+`packages/contracts` はTypeScriptビルド成果物(`dist/`)をmobile/apiが直接importする構成のため、`npm install` 後に自動でビルドされる（`postinstall`）。もし `Cannot find module '@eikaiwa/contracts/dist/...'` のようなエラーが出た場合は `npm run build --workspace packages/contracts` を手動実行すること。
 
 ## 開発サーバーの起動
 

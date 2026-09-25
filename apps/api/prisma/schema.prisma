@@ -1,0 +1,186 @@
+// 仕様書 v2.0 セクション7の論理モデルに対応する物理スキーマ。
+// dev: SQLite（ゼロセットアップ）。本番はPostgres系マネージドDBへの移行を想定し、
+// フィールド構成はそのまま維持できるよう設計している（docs/decisions/0001-phase0-tech-stack.md参照）。
+//
+// 今回のフェーズで実際にAPIから読み書きするのは UserProfile / DevCredential / Conversation /
+// Message / TranslationAttempt / UsageEvent / IdempotencyRecord のみ。
+// 残りは仕様書のデータモデルに合わせて用意済みだが、Phase 2以降で配線する。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model UserProfile {
+  id           String   @id @default(uuid())
+  locale       String   @default("ja-JP")
+  levelSetting String   @default("intermediate")
+  /// JSON文字列として保存（SQLiteコネクタがJson型を未サポートのため）。将来Postgres移行時にJson型へ変更可能。
+  consentFlags String
+  coachingMode String   @default("conversation")
+  createdAt    DateTime @default(now())
+
+  credential         DevCredential?
+  conversations      Conversation[]
+  englishMoments     EnglishMoment[]
+  learningProfile    LearningProfile?
+  dailyLessons       DailyLesson[]
+  assessments        Assessment[]
+  usageEvents        UsageEvent[]
+  idempotencyRecords IdempotencyRecord[]
+}
+
+/// 開発用の自前認証（email+password）。マネージド認証基盤への移行時にこのテーブルごと置き換える想定。
+model DevCredential {
+  id           String      @id @default(uuid())
+  userId       String      @unique
+  user         UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email        String      @unique
+  passwordHash String
+  createdAt    DateTime    @default(now())
+}
+
+model Conversation {
+  id        String    @id @default(uuid())
+  userId    String
+  user      UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic     String?
+  status    String    @default("active")
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  messages Message[]
+
+  @@index([userId])
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  language       String
+  text           String
+  sourceType     String       @default("text")
+  requestId      String?
+  createdAt      DateTime     @default(now())
+
+  speechAsset        SpeechAsset?
+  translationAttempt TranslationAttempt?
+
+  @@index([conversationId])
+}
+
+/// 今回のフェーズでは書き込まない（音声フェーズで使用）。
+model SpeechAsset {
+  id             String    @id @default(uuid())
+  messageId      String    @unique
+  message        Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  storageRef     String
+  durationMs     Int
+  retentionUntil DateTime?
+}
+
+model TranslationAttempt {
+  id                String  @id @default(uuid())
+  sourceMessageId   String  @unique
+  sourceMessage     Message @relation(fields: [sourceMessageId], references: [id], onDelete: Cascade)
+  sourceText        String
+  suggestedText     String
+  selectedText      String?
+  /// 本人が実際にこの英語を発話/入力して送信した場合のみ true。compose候補の表示だけでは true にしない。
+  userSpoke         Boolean @default(false)
+  matchesSuggestion Boolean @default(false)
+  confidence        Float?
+}
+
+/// 今回のフェーズでは書き込まない（Phase 2: My Momentsで使用）。
+model EnglishMoment {
+  id              String    @id @default(uuid())
+  userId          String
+  user            UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceMessageId String
+  jpIntent        String
+  enExpression    String
+  state           String    @default("unknown")
+  nextReviewAt    DateTime?
+  archivedAt      DateTime?
+
+  reviewAttempts ReviewAttempt[]
+
+  @@index([userId])
+}
+
+model ReviewAttempt {
+  id              String        @id @default(uuid())
+  momentId        String
+  moment          EnglishMoment @relation(fields: [momentId], references: [id], onDelete: Cascade)
+  prompt          String
+  answer          String
+  assistanceLevel String
+  outcome         String
+  reviewedAt      DateTime      @default(now())
+}
+
+/// topics/preferences/observedPatterns はJSON文字列として保存（SQLiteがJson型未サポートのため）。
+model LearningProfile {
+  userId           String      @id
+  user             UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topics           String
+  preferences      String
+  observedPatterns String
+  updatedAt        DateTime    @updatedAt
+}
+
+model DailyLesson {
+  id                    String      @id @default(uuid())
+  userId                String
+  user                  UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// JSON文字列（UUID配列）として保存。
+  sourceConversationIds String
+  text                  String
+  status                String      @default("draft")
+  createdAt             DateTime    @default(now())
+}
+
+model Assessment {
+  id           String      @id @default(uuid())
+  userId       String
+  user         UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dimension    String
+  /// JSON文字列（文字列配列）として保存。
+  evidenceRefs String
+  estimate     String?
+  confidence   Float?
+  assessedAt   DateTime    @default(now())
+}
+
+model UsageEvent {
+  id            String      @id @default(uuid())
+  userId        String
+  user          UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  feature       String
+  units         Float
+  estimatedCost Float
+  occurredAt    DateTime    @default(now())
+}
+
+/// 冪等性制御用の内部テーブル（仕様書のデータモデルには含まれない実装詳細）。
+model IdempotencyRecord {
+  id           String      @id @default(uuid())
+  userId       String
+  user         UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  route        String
+  requestId    String
+  requestHash  String
+  status       String      @default("processing")
+  responseJson String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@unique([userId, route, requestId])
+}
